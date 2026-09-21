@@ -22,7 +22,7 @@ public final class ProfilingRunner {
 
     public static void main(String[] args) throws Exception {
         int count = args.length >= 1 ? Integer.parseInt(args[0]) : 200_000;
-        int range = args.length >= 2 ? Integer.parseInt(args[2 - 1]) : 100;
+        int range = args.length >= 2 ? Integer.parseInt(args[1]) : 100;
         Path output = args.length >= 3 ? Path.of(args[2]) : Path.of("profile-methods.csv");
         if (count < 1 || range < 1) {
             throw new IllegalArgumentException("count 和 range 必须为正数");
@@ -95,3 +95,4 @@ public final class ProfilingRunner {
         }
     }
 }
+

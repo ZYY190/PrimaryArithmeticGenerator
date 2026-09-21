@@ -1,0 +1,1140 @@
+小学四则运算自动出题程序
+源码汇总（UTF-8）
+GitHub: https://github.com/ZYY190/PrimaryArithmeticGenerator
+
+
+================================================================================
+文件: src\main\java\com\zyy\arithmetic\ArithmeticGenerator.java
+================================================================================
+
+package com.zyy.arithmetic;
+
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Random;
+import java.util.Set;
+
+/**
+ * 负责生成满足约束且无重复的表达式。
+ */
+public final class ArithmeticGenerator {
+    private static final int MIN_OPERATORS = 1;
+    private static final int MAX_OPERATORS = 3;
+    private static final int MAX_ATTEMPTS_PER_QUESTION = 20_000;
+
+    private final int range;
+    private final Random random;
+    private final Set<String> seenCanonicalKeys = new HashSet<>();
+
+    public ArithmeticGenerator(int range) {
+        this(range, System.nanoTime());
+    }
+
+    public ArithmeticGenerator(int range, long seed) {
+        if (range < 1) {
+            throw new IllegalArgumentException("范围必须是不小于 1 的自然数");
+        }
+        this.range = range;
+        this.random = new Random(seed);
+    }
+
+    public int range() {
+        return range;
+    }
+
+    public List<Question> generate(int count) {
+        if (count < 1) {
+            throw new IllegalArgumentException("题目数量必须大于 0");
+        }
+        List<Question> questions = new ArrayList<>(count);
+        for (int index = 1; index <= count; index++) {
+            Expression expression = generateUniqueExpression();
+            questions.add(new Question(index, expression, expression.value()));
+        }
+        return questions;
+    }
+
+    private Expression generateUniqueExpression() {
+        for (int attempt = 0; attempt < MAX_ATTEMPTS_PER_QUESTION; attempt++) {
+            int operatorCount = MIN_OPERATORS + random.nextInt(MAX_OPERATORS - MIN_OPERATORS + 1);
+            Expression expression = generateTree(operatorCount);
+            if (expression == null) {
+                continue;
+            }
+            String key = expression.canonicalKey();
+            if (seenCanonicalKeys.add(key)) {
+                return expression;
+            }
+        }
+        throw new IllegalStateException("无法生成足够多的不重复题目，请增大 -r 或减少 -n");
+    }
+
+    private Expression generateTree(int operatorCount) {
+        if (operatorCount == 0) {
+            return new Expression.NumberNode(generateAtom());
+        }
+        int leftOperatorCount = random.nextInt(operatorCount);
+        int rightOperatorCount = operatorCount - 1 - leftOperatorCount;
+        Operator operator = randomOperator();
+        Expression left = generateTree(leftOperatorCount);
+        Expression right = generateTree(rightOperatorCount);
+        if (left == null || right == null) {
+            return null;
+        }
+        return constrain(operator, left, right);
+    }
+
+    private Expression constrain(Operator operator, Expression left, Expression right) {
+        Fraction leftValue = left.value();
+        Fraction rightValue = right.value();
+        return switch (operator) {
+            case ADD, MULTIPLY -> new Expression.BinaryNode(operator, left, right);
+            case SUBTRACT -> {
+                if (leftValue.compareTo(rightValue) >= 0) {
+                    yield new Expression.BinaryNode(operator, left, right);
+                }
+                yield new Expression.BinaryNode(operator, right, left);
+            }
+            case DIVIDE -> {
+                if (rightValue.isZero() || leftValue.isZero() || leftValue.equals(rightValue)) {
+                    yield null;
+                }
+                if (leftValue.compareTo(rightValue) > 0) {
+                    Expression temporary = left;
+                    left = right;
+                    right = temporary;
+                }
+                yield new Expression.BinaryNode(operator, left, right);
+            }
+        };
+    }
+
+    private Operator randomOperator() {
+        return Operator.values()[random.nextInt(Operator.values().length)];
+    }
+
+    private Fraction generateAtom() {
+        if (range == 1) {
+            return Fraction.ZERO;
+        }
+        if (range == 2 || random.nextBoolean()) {
+            return Fraction.integer(random.nextInt(range));
+        }
+
+        int denominator = 2 + random.nextInt(range - 2);
+        int numerator = 1 + random.nextInt(denominator - 1);
+        int whole = random.nextInt(range - 1);
+        if (whole == 0) {
+            return Fraction.of(numerator, denominator);
+        }
+        return Fraction.of((long) whole * denominator + numerator, denominator);
+    }
+}
+
+
+================================================================================
+文件: src\main\java\com\zyy\arithmetic\BenchmarkSuite.java
+================================================================================
+
+package com.zyy.arithmetic;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.List;
+
+/**
+ * 在同一个 JVM 中执行多规模基准测试，输出中位数结果。
+ */
+public final class BenchmarkSuite {
+    private BenchmarkSuite() {
+    }
+
+    public static void main(String[] args) throws Exception {
+        Path output = args.length >= 1 ? Path.of(args[0]) : Path.of("performance-runs.csv");
+        int range = args.length >= 2 ? Integer.parseInt(args[1]) : 100;
+        int[] counts = {1_000, 5_000, 10_000, 50_000, 100_000};
+
+        new ArithmeticGenerator(range, 20260922L).generate(10_000);
+
+        StringBuilder csv = new StringBuilder("count,range,median_ms,min_ms,ms_per_question,memory_delta_mb\n");
+        for (int count : counts) {
+            long[] timings = new long[3];
+            long memoryDelta = 0;
+            for (int repeat = 0; repeat < timings.length; repeat++) {
+                Runtime runtime = Runtime.getRuntime();
+                long beforeMemory = runtime.totalMemory() - runtime.freeMemory();
+                long start = System.nanoTime();
+                ArithmeticGenerator generator = new ArithmeticGenerator(range, 20260922L + count + repeat);
+                List<Question> questions = generator.generate(count);
+                if (questions.size() != count) {
+                    throw new IllegalStateException("生成数量不正确");
+                }
+                timings[repeat] = (System.nanoTime() - start) / 1_000_000;
+                memoryDelta = runtime.totalMemory() - runtime.freeMemory() - beforeMemory;
+            }
+            long[] sorted = timings.clone();
+            Arrays.sort(sorted);
+            long median = sorted[1];
+            long min = sorted[0];
+            csv.append(count).append(',')
+                    .append(range).append(',')
+                    .append(median).append(',')
+                    .append(min).append(',')
+                    .append(String.format(java.util.Locale.ROOT, "%.6f", median / (double) count)).append(',')
+                    .append(String.format(java.util.Locale.ROOT, "%.3f", memoryDelta / 1024.0 / 1024.0)).append('\n');
+        }
+        Files.writeString(output, csv.toString(), StandardCharsets.UTF_8);
+        System.out.println(csv);
+        System.out.println("CSV: " + output.toAbsolutePath());
+    }
+}
+
+================================================================================
+文件: src\main\java\com\zyy\arithmetic\CliOptions.java
+================================================================================
+
+package com.zyy.arithmetic;
+
+import java.nio.file.Path;
+
+/**
+ * 命令行参数解析结果。
+ */
+public record CliOptions(Mode mode, int count, int range, Path exerciseFile, Path answerFile) {
+    public enum Mode {
+        GENERATE,
+        GRADE,
+        HELP
+    }
+
+    public static CliOptions parse(String[] args) {
+        if (args.length == 0) {
+            return new CliOptions(Mode.HELP, 0, 0, null, null);
+        }
+        Integer count = null;
+        Integer range = null;
+        Path exerciseFile = null;
+        Path answerFile = null;
+
+        for (int i = 0; i < args.length; i++) {
+            String argument = args[i];
+            switch (argument) {
+                case "-h", "--help" -> {
+                    return new CliOptions(Mode.HELP, 0, 0, null, null);
+                }
+                case "-n" -> count = readPositiveInt(args, ++i, "-n");
+                case "-r" -> range = readPositiveInt(args, ++i, "-r");
+                case "-e" -> exerciseFile = Path.of(readValue(args, ++i, "-e"));
+                case "-a" -> answerFile = Path.of(readValue(args, ++i, "-a"));
+                default -> throw new IllegalArgumentException("未知参数: " + argument);
+            }
+        }
+
+        boolean grading = exerciseFile != null || answerFile != null;
+        if (grading) {
+            if (exerciseFile == null || answerFile == null) {
+                throw new IllegalArgumentException("判分模式必须同时提供 -e 和 -a 参数");
+            }
+            if (count != null || range != null) {
+                throw new IllegalArgumentException("判分模式不能同时使用 -n 或 -r");
+            }
+            return new CliOptions(Mode.GRADE, 0, 0, exerciseFile, answerFile);
+        }
+
+        if (count == null || range == null) {
+            throw new IllegalArgumentException("生成模式必须同时提供 -n 和 -r 参数");
+        }
+        return new CliOptions(Mode.GENERATE, count, range, null, null);
+    }
+
+    private static int readPositiveInt(String[] args, int index, String option) {
+        String value = readValue(args, index, option);
+        try {
+            int parsed = Integer.parseInt(value);
+            if (parsed < 1) {
+                throw new IllegalArgumentException(option + " 必须是不小于 1 的整数");
+            }
+            return parsed;
+        } catch (NumberFormatException exception) {
+            throw new IllegalArgumentException(option + " 需要整数，实际为: " + value);
+        }
+    }
+
+    private static String readValue(String[] args, int index, String option) {
+        if (index >= args.length) {
+            throw new IllegalArgumentException(option + " 缺少参数值");
+        }
+        return args[index];
+    }
+
+    public static String helpText() {
+        return """
+               小学四则运算自动出题程序
+                
+               用法:
+                 Myapp.cmd -n <题目数量> -r <范围>
+                 Myapp.cmd -e <exercisefile>.txt -a <answerfile>.txt
+                 Myapp.cmd -h
+                
+               参数:
+                 -n   生成题目的数量，必须为正整数
+                 -r   题目中数值的范围，生成的数值小于该值，必须为正整数
+                 -e   题目文件路径
+                 -a   答案文件路径
+                 -h   显示本帮助信息
+                
+               示例:
+                 Myapp.cmd -n 10 -r 10
+                 Myapp.cmd -e Exercises.txt -a Answers.txt
+               """;
+    }
+}
+
+================================================================================
+文件: src\main\java\com\zyy\arithmetic\Expression.java
+================================================================================
+
+package com.zyy.arithmetic;
+
+import java.util.Objects;
+
+/**
+ * 表达式抽象。NumberNode 和 BinaryNode 共同组成表达式树。
+ */
+public sealed interface Expression permits Expression.NumberNode, Expression.BinaryNode {
+    Fraction value();
+
+    int operatorCount();
+
+    String toDisplay();
+
+    String canonicalKey();
+
+    default String toQuestion() {
+        return toDisplay() + " =";
+    }
+
+    record NumberNode(Fraction value) implements Expression {
+        public NumberNode {
+            Objects.requireNonNull(value, "value");
+        }
+
+        @Override
+        public int operatorCount() {
+            return 0;
+        }
+
+        @Override
+        public String toDisplay() {
+            return value.toDisplay();
+        }
+
+        @Override
+        public String canonicalKey() {
+            return "N:" + value.canonical();
+        }
+    }
+
+    final class BinaryNode implements Expression {
+        private final Operator operator;
+        private final Expression left;
+        private final Expression right;
+        private final Fraction value;
+
+        public BinaryNode(Operator operator, Expression left, Expression right) {
+            this.operator = Objects.requireNonNull(operator, "operator");
+            this.left = Objects.requireNonNull(left, "left");
+            this.right = Objects.requireNonNull(right, "right");
+            this.value = operator.apply(left.value(), right.value());
+        }
+
+        public Operator operator() {
+            return operator;
+        }
+
+        public Expression left() {
+            return left;
+        }
+
+        public Expression right() {
+            return right;
+        }
+
+        @Override
+        public Fraction value() {
+            return value;
+        }
+
+        @Override
+        public int operatorCount() {
+            return 1 + left.operatorCount() + right.operatorCount();
+        }
+
+        @Override
+        public String toDisplay() {
+            String leftText = formatChild(left, false);
+            String rightText = formatChild(right, true);
+            return leftText + " " + operator.symbol() + " " + rightText;
+        }
+
+        private String formatChild(Expression child, boolean rightSide) {
+            if (!(child instanceof BinaryNode binary)) {
+                return child.toDisplay();
+            }
+            boolean parentheses = binary.operator.precedence() < operator.precedence()
+                    || (rightSide && binary.operator.precedence() == operator.precedence());
+            String text = binary.toDisplay();
+            return parentheses ? "(" + text + ")" : text;
+        }
+
+        @Override
+        public String canonicalKey() {
+            String leftKey = left.canonicalKey();
+            String rightKey = right.canonicalKey();
+            if (operator.isCommutative() && leftKey.compareTo(rightKey) > 0) {
+                String temporary = leftKey;
+                leftKey = rightKey;
+                rightKey = temporary;
+            }
+            return "(" + operator.name() + ":" + leftKey + "," + rightKey + ")";
+        }
+
+        @Override
+        public String toString() {
+            return toDisplay();
+        }
+    }
+}
+
+================================================================================
+文件: src\main\java\com\zyy\arithmetic\ExpressionParser.java
+================================================================================
+
+package com.zyy.arithmetic;
+
+import java.math.BigInteger;
+
+/**
+ * 递归下降解析器，支持自然数、真分数、带分数、括号和四则运算符。
+ */
+public final class ExpressionParser {
+    private final String input;
+    private int position;
+
+    private ExpressionParser(String input) {
+        this.input = input;
+    }
+
+    public static Expression parse(String input) {
+        if (input == null || input.isBlank()) {
+            throw new IllegalArgumentException("表达式不能为空");
+        }
+        ExpressionParser parser = new ExpressionParser(input.replace("\uFEFF", ""));
+        Expression expression = parser.parseExpression();
+        parser.skipSpaces();
+        if (!parser.atEnd()) {
+            throw parser.error("表达式末尾存在无法识别的内容");
+        }
+        return expression;
+    }
+
+    private Expression parseExpression() {
+        Expression expression = parseTerm();
+        while (true) {
+            skipSpaces();
+            if (match('+')) {
+                expression = new Expression.BinaryNode(Operator.ADD, expression, parseTerm());
+            } else if (match('-') || match('−')) {
+                expression = new Expression.BinaryNode(Operator.SUBTRACT, expression, parseTerm());
+            } else {
+                return expression;
+            }
+        }
+    }
+
+    private Expression parseTerm() {
+        Expression expression = parseFactor();
+        while (true) {
+            skipSpaces();
+            if (match('*') || match('×')) {
+                expression = new Expression.BinaryNode(Operator.MULTIPLY, expression, parseFactor());
+            } else if (match('/') || match('÷')) {
+                expression = new Expression.BinaryNode(Operator.DIVIDE, expression, parseFactor());
+            } else {
+                return expression;
+            }
+        }
+    }
+
+    private Expression parseFactor() {
+        skipSpaces();
+        if (match('(')) {
+            Expression expression = parseExpression();
+            skipSpaces();
+            if (!match(')')) {
+                throw error("缺少右括号");
+            }
+            return expression;
+        }
+        if (atEnd() || !Character.isDigit(peek())) {
+            throw error("需要数字或左括号");
+        }
+        return new Expression.NumberNode(parseNumber());
+    }
+
+    private Fraction parseNumber() {
+        BigInteger first = readInteger();
+        skipSpaces();
+        if (match('’') || match('\'')) {
+            BigInteger whole = first;
+            skipSpaces();
+            if (atEnd() || !Character.isDigit(peek())) {
+                throw error("带分数缺少分子");
+            }
+            BigInteger numerator = readInteger();
+            skipSpaces();
+            if (!match('/')) {
+                throw error("带分数缺少分数线");
+            }
+            BigInteger denominator = readInteger();
+            return Fraction.of(whole.multiply(denominator).add(numerator), denominator);
+        }
+        if (match('/')) {
+            BigInteger denominator = readInteger();
+            return Fraction.of(first, denominator);
+        }
+        return Fraction.of(first, BigInteger.ONE);
+    }
+
+    private BigInteger readInteger() {
+        skipSpaces();
+        if (atEnd() || !Character.isDigit(peek())) {
+            throw error("需要自然数");
+        }
+        int start = position;
+        while (!atEnd() && Character.isDigit(peek())) {
+            position++;
+        }
+        return new BigInteger(input.substring(start, position));
+    }
+
+    private void skipSpaces() {
+        while (!atEnd() && Character.isWhitespace(peek())) {
+            position++;
+        }
+    }
+
+    private boolean match(char expected) {
+        if (!atEnd() && input.charAt(position) == expected) {
+            position++;
+            return true;
+        }
+        return false;
+    }
+
+    private char peek() {
+        return input.charAt(position);
+    }
+
+    private boolean atEnd() {
+        return position >= input.length();
+    }
+
+    private IllegalArgumentException error(String message) {
+        return new IllegalArgumentException(message + "，位置 " + position + "，输入：" + input);
+    }
+}
+
+
+================================================================================
+文件: src\main\java\com\zyy\arithmetic\FileService.java
+================================================================================
+
+package com.zyy.arithmetic;
+
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+
+/**
+ * 输入输出文件服务。
+ */
+public final class FileService {
+    private FileService() {
+    }
+
+    public static void writeExercises(Path file, List<Question> questions) throws IOException {
+        try (BufferedWriter writer = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {
+            for (Question question : questions) {
+                writer.write(question.exerciseText());
+                writer.newLine();
+            }
+        }
+    }
+
+    public static void writeAnswers(Path file, List<Question> questions) throws IOException {
+        try (BufferedWriter writer = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {
+            for (Question question : questions) {
+                writer.write(question.answerText());
+                writer.newLine();
+            }
+        }
+    }
+
+    public static void writeGrade(Path file, GradeResult result) throws IOException {
+        Files.writeString(file, result.toDisplay() + System.lineSeparator(), StandardCharsets.UTF_8);
+    }
+}
+
+================================================================================
+文件: src\main\java\com\zyy\arithmetic\Fraction.java
+================================================================================
+
+package com.zyy.arithmetic;
+
+import java.math.BigInteger;
+import java.util.Objects;
+
+/**
+ * 不可变、自动约分的分数模型。
+ */
+public final class Fraction implements Comparable<Fraction> {
+    public static final Fraction ZERO = new Fraction(BigInteger.ZERO, BigInteger.ONE);
+    public static final Fraction ONE = new Fraction(BigInteger.ONE, BigInteger.ONE);
+
+    private final BigInteger numerator;
+    private final BigInteger denominator;
+
+    private Fraction(BigInteger numerator, BigInteger denominator) {
+        if (denominator.signum() == 0) {
+            throw new ArithmeticException("分母不能为 0");
+        }
+        if (denominator.signum() < 0) {
+            numerator = numerator.negate();
+            denominator = denominator.negate();
+        }
+        BigInteger gcd = numerator.gcd(denominator);
+        this.numerator = numerator.divide(gcd);
+        this.denominator = denominator.divide(gcd);
+    }
+
+    public static Fraction of(BigInteger numerator, BigInteger denominator) {
+        return new Fraction(numerator, denominator);
+    }
+
+    public static Fraction of(long numerator, long denominator) {
+        return new Fraction(BigInteger.valueOf(numerator), BigInteger.valueOf(denominator));
+    }
+
+    public static Fraction integer(long value) {
+        return of(value, 1);
+    }
+
+    public BigInteger numerator() {
+        return numerator;
+    }
+
+    public BigInteger denominator() {
+        return denominator;
+    }
+
+    public Fraction add(Fraction other) {
+        return of(numerator.multiply(other.denominator).add(other.numerator.multiply(denominator)),
+                denominator.multiply(other.denominator));
+    }
+
+    public Fraction subtract(Fraction other) {
+        return of(numerator.multiply(other.denominator).subtract(other.numerator.multiply(denominator)),
+                denominator.multiply(other.denominator));
+    }
+
+    public Fraction multiply(Fraction other) {
+        return of(numerator.multiply(other.numerator), denominator.multiply(other.denominator));
+    }
+
+    public Fraction divide(Fraction other) {
+        if (other.numerator.signum() == 0) {
+            throw new ArithmeticException("除数不能为 0");
+        }
+        return of(numerator.multiply(other.denominator), denominator.multiply(other.numerator));
+    }
+
+    public boolean isZero() {
+        return numerator.signum() == 0;
+    }
+
+    public boolean isNonNegative() {
+        return numerator.signum() >= 0;
+    }
+
+    public boolean isInteger() {
+        return denominator.equals(BigInteger.ONE);
+    }
+
+    public boolean isProper() {
+        return numerator.signum() > 0 && numerator.compareTo(denominator) < 0;
+    }
+
+    public String canonical() {
+        return numerator + "/" + denominator;
+    }
+
+    public String toDisplay() {
+        if (numerator.signum() == 0) {
+            return "0";
+        }
+        String sign = numerator.signum() < 0 ? "-" : "";
+        BigInteger absolute = numerator.abs();
+        if (denominator.equals(BigInteger.ONE)) {
+            return sign + absolute;
+        }
+        if (absolute.compareTo(denominator) < 0) {
+            return sign + absolute + "/" + denominator;
+        }
+        BigInteger whole = absolute.divide(denominator);
+        BigInteger remainder = absolute.remainder(denominator);
+        if (remainder.signum() == 0) {
+            return sign + whole;
+        }
+        return sign + whole + "’" + remainder + "/" + denominator;
+    }
+
+    @Override
+    public int compareTo(Fraction other) {
+        return numerator.multiply(other.denominator).compareTo(other.numerator.multiply(denominator));
+    }
+
+    @Override
+    public boolean equals(Object object) {
+        if (this == object) {
+            return true;
+        }
+        if (!(object instanceof Fraction other)) {
+            return false;
+        }
+        return numerator.equals(other.numerator) && denominator.equals(other.denominator);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(numerator, denominator);
+    }
+
+    @Override
+    public String toString() {
+        return toDisplay();
+    }
+}
+
+================================================================================
+文件: src\main\java\com\zyy\arithmetic\Grader.java
+================================================================================
+
+package com.zyy.arithmetic;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.regex.Pattern;
+
+/**
+ * 对题目文件和答案文件逐题判分。
+ */
+public final class Grader {
+    private static final Pattern LINE_PREFIX = Pattern.compile("^\\s*\\d+\\.\\s*");
+
+    public GradeResult grade(Path exerciseFile, Path answerFile) throws IOException {
+        List<String> exercises = Files.readAllLines(exerciseFile, StandardCharsets.UTF_8);
+        List<String> answers = Files.readAllLines(answerFile, StandardCharsets.UTF_8);
+        if (exercises.size() != answers.size()) {
+            throw new IOException("题目数与答案数不一致：Exercises=" + exercises.size()
+                    + ", Answers=" + answers.size());
+        }
+
+        List<Integer> correct = new ArrayList<>();
+        List<Integer> wrong = new ArrayList<>();
+        for (int index = 0; index < exercises.size(); index++) {
+            int number = index + 1;
+            String exercise = stripPrefix(exercises.get(index)).trim();
+            String answer = stripPrefix(answers.get(index)).trim();
+            if (!exercise.endsWith("=")) {
+                throw new IOException("第 " + number + " 题缺少等号: " + exercise);
+            }
+            String expressionText = exercise.substring(0, exercise.length() - 1).trim();
+            Expression expression = ExpressionParser.parse(expressionText);
+            Fraction expected = expression.value();
+            Fraction actual = ExpressionParser.parse(answer).value();
+            if (expected.equals(actual)) {
+                correct.add(number);
+            } else {
+                wrong.add(number);
+            }
+        }
+        return new GradeResult(correct, wrong);
+    }
+
+    private String stripPrefix(String line) {
+        if (!line.isEmpty() && line.charAt(0) == '\uFEFF') {
+            line = line.substring(1);
+        }
+        return LINE_PREFIX.matcher(line).replaceFirst("");
+    }
+}
+
+
+================================================================================
+文件: src\main\java\com\zyy\arithmetic\GradeResult.java
+================================================================================
+
+package com.zyy.arithmetic;
+
+import java.util.List;
+
+/**
+ * 判分统计结果。
+ */
+public record GradeResult(List<Integer> correct, List<Integer> wrong) {
+    public GradeResult {
+        correct = List.copyOf(correct);
+        wrong = List.copyOf(wrong);
+    }
+
+    public String toDisplay() {
+        return "Correct: " + correct.size() + " " + formatNumbers(correct) + System.lineSeparator()
+                + "Wrong: " + wrong.size() + " " + formatNumbers(wrong);
+    }
+
+    private static String formatNumbers(List<Integer> numbers) {
+        StringBuilder builder = new StringBuilder("(");
+        for (int i = 0; i < numbers.size(); i++) {
+            if (i > 0) {
+                builder.append(", ");
+            }
+            builder.append(numbers.get(i));
+        }
+        return builder.append(")").toString();
+    }
+}
+
+================================================================================
+文件: src\main\java\com\zyy\arithmetic\Main.java
+================================================================================
+
+package com.zyy.arithmetic;
+
+import java.io.IOException;
+import java.nio.file.Path;
+import java.util.List;
+
+/**
+ * 命令行程序入口。
+ */
+public final class Main {
+    private Main() {
+    }
+
+    public static void main(String[] args) {
+        int exitCode = run(args, Path.of("").toAbsolutePath());
+        if (exitCode != 0) {
+            System.exit(exitCode);
+        }
+    }
+
+    public static int run(String[] args, Path workingDirectory) {
+        try {
+            CliOptions options = CliOptions.parse(args);
+            return switch (options.mode()) {
+                case HELP -> {
+                    System.out.println(CliOptions.helpText());
+                    yield 0;
+                }
+                case GENERATE -> generate(options, workingDirectory);
+                case GRADE -> grade(options, workingDirectory);
+            };
+        } catch (IllegalArgumentException exception) {
+            System.err.println("参数错误: " + exception.getMessage());
+            System.err.println();
+            System.err.println(CliOptions.helpText());
+            return 2;
+        } catch (IOException exception) {
+            System.err.println("文件处理失败: " + exception.getMessage());
+            return 3;
+        } catch (RuntimeException exception) {
+            System.err.println("运行失败: " + exception.getMessage());
+            return 4;
+        }
+    }
+
+    private static int generate(CliOptions options, Path workingDirectory) throws IOException {
+        ArithmeticGenerator generator = new ArithmeticGenerator(options.range());
+        List<Question> questions = generator.generate(options.count());
+        Path exerciseFile = workingDirectory.resolve("Exercises.txt");
+        Path answerFile = workingDirectory.resolve("Answers.txt");
+        FileService.writeExercises(exerciseFile, questions);
+        FileService.writeAnswers(answerFile, questions);
+        System.out.println("已生成 " + questions.size() + " 道题目。");
+        System.out.println("题目: " + exerciseFile.toAbsolutePath());
+        System.out.println("答案: " + answerFile.toAbsolutePath());
+        return 0;
+    }
+
+    private static int grade(CliOptions options, Path workingDirectory) throws IOException {
+        Path exerciseFile = resolve(workingDirectory, options.exerciseFile());
+        Path answerFile = resolve(workingDirectory, options.answerFile());
+        GradeResult result = new Grader().grade(exerciseFile, answerFile);
+        Path gradeFile = workingDirectory.resolve("Grade.txt");
+        FileService.writeGrade(gradeFile, result);
+        System.out.println(result.toDisplay());
+        System.out.println("统计结果: " + gradeFile.toAbsolutePath());
+        return 0;
+    }
+
+    private static Path resolve(Path workingDirectory, Path path) {
+        return path.isAbsolute() ? path : workingDirectory.resolve(path);
+    }
+}
+
+
+================================================================================
+文件: src\main\java\com\zyy\arithmetic\Operator.java
+================================================================================
+
+package com.zyy.arithmetic;
+
+import java.util.function.BinaryOperator;
+
+/**
+ * 四则运算符及其优先级。
+ */
+public enum Operator {
+    ADD("+", 1, true, Fraction::add),
+    SUBTRACT("−", 1, false, Fraction::subtract),
+    MULTIPLY("×", 2, true, Fraction::multiply),
+    DIVIDE("÷", 2, false, Fraction::divide);
+
+    private final String symbol;
+    private final int precedence;
+    private final boolean commutative;
+    private final BinaryOperator<Fraction> operation;
+
+    Operator(String symbol, int precedence, boolean commutative, BinaryOperator<Fraction> operation) {
+        this.symbol = symbol;
+        this.precedence = precedence;
+        this.commutative = commutative;
+        this.operation = operation;
+    }
+
+    public String symbol() {
+        return symbol;
+    }
+
+    public int precedence() {
+        return precedence;
+    }
+
+    public boolean isCommutative() {
+        return commutative;
+    }
+
+    public Fraction apply(Fraction left, Fraction right) {
+        return operation.apply(left, right);
+    }
+
+    public static Operator fromSymbol(String symbol) {
+        return switch (symbol) {
+            case "+" -> ADD;
+            case "-", "−" -> SUBTRACT;
+            case "*", "×", "x", "X" -> MULTIPLY;
+            case "/", "÷" -> DIVIDE;
+            default -> throw new IllegalArgumentException("未知运算符: " + symbol);
+        };
+    }
+}
+
+================================================================================
+文件: src\main\java\com\zyy\arithmetic\PerformanceRunner.java
+================================================================================
+
+package com.zyy.arithmetic;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+
+/**
+ * 用于生成性能分析数据的小型基准程序。
+ */
+public final class PerformanceRunner {
+    private PerformanceRunner() {
+    }
+
+    public static void main(String[] args) throws Exception {
+        int count = args.length >= 1 ? Integer.parseInt(args[0]) : 10_000;
+        int range = args.length >= 2 ? Integer.parseInt(args[1]) : 100;
+        Path output = args.length >= 3 ? Path.of(args[2]) : Path.of("performance.csv");
+
+        Runtime runtime = Runtime.getRuntime();
+        long beforeMemory = runtime.totalMemory() - runtime.freeMemory();
+        long start = System.nanoTime();
+        ArithmeticGenerator generator = new ArithmeticGenerator(range, 20260922L + count);
+        List<Question> questions = generator.generate(count);
+        long elapsedNanos = System.nanoTime() - start;
+        long afterMemory = runtime.totalMemory() - runtime.freeMemory();
+        long elapsedMillis = elapsedNanos / 1_000_000;
+        double millisecondsPerQuestion = elapsedMillis / (double) count;
+
+        String header = "count,range,total_ms,ms_per_question,memory_delta_mb\n";
+        String row = count + "," + range + "," + elapsedMillis + ","
+                + String.format(java.util.Locale.ROOT, "%.6f", millisecondsPerQuestion) + ","
+                + String.format(java.util.Locale.ROOT, "%.3f", (afterMemory - beforeMemory) / 1024.0 / 1024.0) + "\n";
+        Files.writeString(output, header + row, StandardCharsets.UTF_8);
+        System.out.println("Generated " + questions.size() + " questions in " + elapsedMillis + " ms");
+        System.out.println("CSV: " + output.toAbsolutePath());
+    }
+}
+
+================================================================================
+文件: src\main\java\com\zyy\arithmetic\ProfilingRunner.java
+================================================================================
+
+package com.zyy.arithmetic;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.LongAdder;
+
+/**
+ * 基于线程栈采样的轻量级热点分析器。
+ *
+ * <p>JFR 在部分受控环境中不可用，本类使用 1 毫秒采样间隔读取主线程栈顶方法，
+ * 输出实际工作负载中的热点方法排序。</p>
+ */
+public final class ProfilingRunner {
+    private ProfilingRunner() {
+    }
+
+    public static void main(String[] args) throws Exception {
+        int count = args.length >= 1 ? Integer.parseInt(args[0]) : 200_000;
+        int range = args.length >= 2 ? Integer.parseInt(args[1]) : 100;
+        Path output = args.length >= 3 ? Path.of(args[2]) : Path.of("profile-methods.csv");
+        if (count < 1 || range < 1) {
+            throw new IllegalArgumentException("count 和 range 必须为正数");
+        }
+
+        Thread target = Thread.currentThread();
+        Map<String, LongAdder> counters = new ConcurrentHashMap<>();
+        SamplingThread sampler = new SamplingThread(target, counters);
+        sampler.start();
+
+        long start = System.nanoTime();
+        int completed = 0;
+        List<Question> lastBatch = List.of();
+        while (completed < count) {
+            int batchSize = Math.min(5_000, count - completed);
+            lastBatch = new ArithmeticGenerator(range, 20260922L + completed).generate(batchSize);
+            completed += batchSize;
+        }
+        long elapsedMillis = (System.nanoTime() - start) / 1_000_000;
+
+        sampler.stopAndJoin();
+        long totalSamples = counters.values().stream().mapToLong(LongAdder::sum).sum();
+        List<Map.Entry<String, LongAdder>> entries = new ArrayList<>(counters.entrySet());
+        entries.sort(Map.Entry.<String, LongAdder>comparingByValue(
+                Comparator.comparingLong(LongAdder::sum)).reversed());
+
+        StringBuilder csv = new StringBuilder("rank,method,samples,percent\n");
+        int rank = 1;
+        for (Map.Entry<String, LongAdder> entry : entries) {
+            long samples = entry.getValue().sum();
+            double percent = totalSamples == 0 ? 0.0 : samples * 100.0 / totalSamples;
+            csv.append(rank++).append(',')
+                    .append(entry.getKey()).append(',')
+                    .append(samples).append(',')
+                    .append(String.format(java.util.Locale.ROOT, "%.2f", percent)).append('\n');
+        }
+        Files.writeString(output, csv.toString(), StandardCharsets.UTF_8);
+        System.out.println("Profiled " + completed + " questions in " + elapsedMillis + " ms");
+        System.out.println("Samples: " + totalSamples);
+        System.out.println("CSV: " + output.toAbsolutePath());
+    }
+
+    private static final class SamplingThread extends Thread {
+        private final Thread target;
+        private final Map<String, LongAdder> counters;
+        private volatile boolean running = true;
+
+        private SamplingThread(Thread target, Map<String, LongAdder> counters) {
+            super("arithmetic-sampler");
+            this.target = target;
+            this.counters = counters;
+            setDaemon(true);
+        }
+
+        @Override
+        public void run() {
+            while (running) {
+                StackTraceElement[] stack = target.getStackTrace();
+                if (stack.length > 0) {
+                    StackTraceElement frame = stack[0];
+                    String method = frame.getClassName() + "." + frame.getMethodName();
+                    counters.computeIfAbsent(method, ignored -> new LongAdder()).increment();
+                }
+                try {
+                    Thread.sleep(1);
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+        }
+
+        private void stopAndJoin() throws InterruptedException {
+            running = false;
+            join();
+        }
+    }
+}
+
+
+
+================================================================================
+文件: src\main\java\com\zyy\arithmetic\Question.java
+================================================================================
+
+package com.zyy.arithmetic;
+
+import java.util.Objects;
+
+/**
+ * 一道题目及其标准答案。
+ */
+public record Question(int index, Expression expression, Fraction answer) {
+    public Question {
+        Objects.requireNonNull(expression, "expression");
+        Objects.requireNonNull(answer, "answer");
+    }
+
+    public String exerciseText() {
+        return index + ". " + expression.toQuestion();
+    }
+
+    public String answerText() {
+        return index + ". " + answer.toDisplay();
+    }
+}

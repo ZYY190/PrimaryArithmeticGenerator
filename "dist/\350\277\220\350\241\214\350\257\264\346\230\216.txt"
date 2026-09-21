@@ -1,0 +1,42 @@
+小学四则运算自动出题程序运行说明
+=================================
+
+一、环境
+1. 安装 JDK 17。
+2. Windows 下打开 PowerShell。
+3. 进入项目根目录（包含 Myapp.cmd、src、scripts 的目录）。
+
+二、构建
+执行：
+  .\scripts\build.ps1
+构建成功后生成：
+  dist\Myapp.jar
+
+三、生成题目
+生成 10 道，数值范围小于 10：
+  .\Myapp.cmd -n 10 -r 10
+
+生成 10000 道，数值范围小于 100：
+  .\Myapp.cmd -n 10000 -r 100
+
+输出文件位于当前执行目录：
+  Exercises.txt
+  Answers.txt
+
+四、判分
+  .\Myapp.cmd -e Exercises.txt -a Answers.txt
+
+输出文件：
+  Grade.txt
+
+五、测试
+  .\scripts\run-tests.ps1
+
+六、在 IDEA 中运行
+1. 使用 IntelliJ IDEA 打开项目根目录。
+2. Project SDK 选择 JDK 17。
+3. 将 src\main\java 标记为 Sources Root。
+4. 将 src\test\java 标记为 Test Sources Root。
+5. 运行 com.zyy.arithmetic.Main。
+6. Program arguments 填：-n 10 -r 10
+   判分模式填：-e Exercises.txt -a Answers.txt

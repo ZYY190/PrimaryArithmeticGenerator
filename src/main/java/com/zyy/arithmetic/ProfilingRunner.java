@@ -34,7 +34,13 @@ public final class ProfilingRunner {
         sampler.start();
 
         long start = System.nanoTime();
-        List<Question> questions = new ArithmeticGenerator(range, 20260922L).generate(count);
+        int completed = 0;
+        List<Question> lastBatch = List.of();
+        while (completed < count) {
+            int batchSize = Math.min(5_000, count - completed);
+            lastBatch = new ArithmeticGenerator(range, 20260922L + completed).generate(batchSize);
+            completed += batchSize;
+        }
         long elapsedMillis = (System.nanoTime() - start) / 1_000_000;
 
         sampler.stopAndJoin();
@@ -54,7 +60,7 @@ public final class ProfilingRunner {
                     .append(String.format(java.util.Locale.ROOT, "%.2f", percent)).append('\n');
         }
         Files.writeString(output, csv.toString(), StandardCharsets.UTF_8);
-        System.out.println("Profiled " + questions.size() + " questions in " + elapsedMillis + " ms");
+        System.out.println("Profiled " + completed + " questions in " + elapsedMillis + " ms");
         System.out.println("Samples: " + totalSamples);
         System.out.println("CSV: " + output.toAbsolutePath());
     }
@@ -95,4 +101,5 @@ public final class ProfilingRunner {
         }
     }
 }
+
 

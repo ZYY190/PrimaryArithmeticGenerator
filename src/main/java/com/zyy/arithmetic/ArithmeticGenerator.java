@@ -40,14 +40,10 @@ public final class ArithmeticGenerator {
         }
         List<Question> questions = new ArrayList<>(count);
         for (int index = 1; index <= count; index++) {
-            questions.add(new Question(index, generateUniqueExpression(), null));
+            Expression expression = generateUniqueExpression();
+            questions.add(new Question(index, expression, expression.value()));
         }
-
-        List<Question> completed = new ArrayList<>(count);
-        for (Question question : questions) {
-            completed.add(new Question(question.index(), question.expression(), question.expression().value()));
-        }
-        return completed;
+        return questions;
     }
 
     private Expression generateUniqueExpression() {
@@ -126,3 +122,4 @@ public final class ArithmeticGenerator {
         return Fraction.of((long) whole * denominator + numerator, denominator);
     }
 }
+

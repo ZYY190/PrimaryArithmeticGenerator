@@ -64,10 +64,11 @@ public final class Main {
         FileService.writeGrade(gradeFile, result);
         System.out.println(result.toDisplay());
         System.out.println("统计结果: " + gradeFile.toAbsolutePath());
-        return result.wrong().isEmpty() ? 0 : 1;
+        return 0;
     }
 
     private static Path resolve(Path workingDirectory, Path path) {
         return path.isAbsolute() ? path : workingDirectory.resolve(path);
     }
 }
+

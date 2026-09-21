@@ -45,6 +45,10 @@ public final class Grader {
     }
 
     private String stripPrefix(String line) {
+        if (!line.isEmpty() && line.charAt(0) == '\uFEFF') {
+            line = line.substring(1);
+        }
         return LINE_PREFIX.matcher(line).replaceFirst("");
     }
 }
+

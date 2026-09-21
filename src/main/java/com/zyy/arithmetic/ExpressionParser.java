@@ -17,7 +17,7 @@ public final class ExpressionParser {
         if (input == null || input.isBlank()) {
             throw new IllegalArgumentException("表达式不能为空");
         }
-        ExpressionParser parser = new ExpressionParser(input);
+        ExpressionParser parser = new ExpressionParser(input.replace("\uFEFF", ""));
         Expression expression = parser.parseExpression();
         parser.skipSpaces();
         if (!parser.atEnd()) {
@@ -132,3 +132,4 @@ public final class ExpressionParser {
         return new IllegalArgumentException(message + "，位置 " + position + "，输入：" + input);
     }
 }
+

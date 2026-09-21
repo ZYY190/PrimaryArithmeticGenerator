@@ -4,3 +4,7 @@ out/
 *.log
 *.jfr
 work/
+
+/Exercises.txt
+/Answers.txt
+/Grade.txt
